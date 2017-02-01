@@ -1,7 +1,4 @@
 /**
- * $Revision: 3034 $
- * $Date: 2005-11-04 21:02:33 -0300 (Fri, 04 Nov 2005) $
- *
  * Copyright (C) 2004-2008 Jive Software. All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -25,9 +22,10 @@ import java.security.cert.X509Certificate;
 import java.util.ArrayList;
 import java.util.List;
 
+import org.apache.jasper.servlet.JasperInitializer;
 import org.apache.tomcat.InstanceManager;
 import org.apache.tomcat.SimpleInstanceManager;
-import org.eclipse.jetty.apache.jsp.JettyJasperInitializer;
+import org.eclipse.jetty.annotations.ServletContainerInitializersStarter;
 import org.eclipse.jetty.plus.annotation.ContainerInitializer;
 import org.eclipse.jetty.server.Connector;
 import org.eclipse.jetty.server.Handler;
@@ -40,7 +38,6 @@ import org.eclipse.jetty.server.SslConnectionFactory;
 import org.eclipse.jetty.server.handler.ContextHandlerCollection;
 import org.eclipse.jetty.server.handler.DefaultHandler;
 import org.eclipse.jetty.server.handler.HandlerCollection;
-import org.eclipse.jetty.servlet.ServletContextHandler;
 import org.eclipse.jetty.spdy.server.http.HTTPSPDYServerConnector;
 import org.eclipse.jetty.util.ssl.SslContextFactory;
 import org.eclipse.jetty.util.thread.QueuedThreadPool;
@@ -138,7 +135,12 @@ public class AdminConsolePlugin implements Plugin {
         // Create a connector for https traffic if it's enabled.
         sslEnabled = false;
         try {
-            final IdentityStore identityStore = XMPPServer.getInstance().getCertificateStoreManager().getIdentityStore( ConnectionType.WEBADMIN );
+            IdentityStore identityStore = null;
+            if (XMPPServer.getInstance().getCertificateStoreManager() == null){
+            	Log.warn( "Admin console: CertifcateStoreManager has not been initialized yet. HTTPS will be unavailable." );
+            } else {
+            	identityStore = XMPPServer.getInstance().getCertificateStoreManager().getIdentityStore( ConnectionType.WEBADMIN );
+            }
             if (identityStore != null && adminSecurePort > 0 )
             {
                 if ( identityStore.getAllCertificates().isEmpty() )
@@ -328,11 +330,14 @@ public class AdminConsolePlugin implements Plugin {
     }
 
     private void createWebAppContext() {
-        ServletContextHandler context;
+        WebAppContext context;
         // Add web-app. Check to see if we're in development mode. If so, we don't
         // add the normal web-app location, but the web-app in the project directory.
-        if (Boolean.getBoolean("developmentMode")) {
+        boolean developmentMode = Boolean.getBoolean("developmentMode");
+        if( developmentMode )
+        {
             System.out.println(LocaleUtils.getLocalizedString("admin.console.devmode"));
+
             context = new WebAppContext(contexts, pluginDir.getParentFile().getParentFile().getParentFile().getParent() +
                     File.separator + "src" + File.separator + "web", "/");
         }
@@ -343,11 +348,19 @@ public class AdminConsolePlugin implements Plugin {
 
         // Ensure the JSP engine is initialized correctly (in order to be able to cope with Tomcat/Jasper precompiled JSPs).
         final List<ContainerInitializer> initializers = new ArrayList<>();
-        initializers.add(new ContainerInitializer(new JettyJasperInitializer(), null));
+        initializers.add(new ContainerInitializer(new JasperInitializer(), null));
         context.setAttribute("org.eclipse.jetty.containerInitializers", initializers);
         context.setAttribute(InstanceManager.class.getName(), new SimpleInstanceManager());
 
-        context.setWelcomeFiles(new String[]{"index.jsp"});
+        // The index.html includes a redirect to the index.jsp and doesn't bypass
+        // the context security when in development mode
+        context.setWelcomeFiles(new String[]{"index.html"});
+
+        // Make sure the context initialization is done when in development mode
+        if( developmentMode )
+        {
+            context.addBean( new ServletContainerInitializersStarter( context ), true );
+        }
     }
 
     private void log(String string) {

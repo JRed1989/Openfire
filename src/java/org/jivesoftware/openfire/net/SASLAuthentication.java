@@ -1,8 +1,4 @@
 /**
- * $RCSfile$
- * $Revision: $
- * $Date: $
- *
  * Copyright (C) 2005-2008 Jive Software. All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -20,12 +16,14 @@
 
 package org.jivesoftware.openfire.net;
 
+import com.sun.mail.smtp.DigestMD5;
 import org.dom4j.DocumentHelper;
 import org.dom4j.Element;
 import org.dom4j.Namespace;
 import org.dom4j.QName;
 import org.jivesoftware.openfire.Connection;
 import org.jivesoftware.openfire.XMPPServer;
+import org.jivesoftware.openfire.XMPPServerInfo;
 import org.jivesoftware.openfire.auth.AuthFactory;
 import org.jivesoftware.openfire.auth.AuthToken;
 import org.jivesoftware.openfire.keystore.CertificateStoreManager;
@@ -35,15 +33,14 @@ import org.jivesoftware.openfire.sasl.JiveSharedSecretSaslServer;
 import org.jivesoftware.openfire.sasl.SaslFailureException;
 import org.jivesoftware.openfire.session.*;
 import org.jivesoftware.openfire.spi.ConnectionType;
-import org.jivesoftware.util.CertificateManager;
-import org.jivesoftware.util.JiveGlobals;
-import org.jivesoftware.util.StringUtils;
+import org.jivesoftware.util.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.security.sasl.Sasl;
 import javax.security.sasl.SaslException;
 import javax.security.sasl.SaslServer;
+import javax.security.sasl.SaslServerFactory;
 import java.security.KeyStore;
 import java.security.Security;
 import java.security.cert.Certificate;
@@ -84,7 +81,42 @@ public class SASLAuthentication {
         // Add (proprietary) Providers of SASL implementation to the Java security context.
         Security.addProvider( new org.jivesoftware.openfire.sasl.SaslProvider() );
 
+        // Convert XML based provider setup to Database based
+        JiveGlobals.migrateProperty("sasl.mechs");
+        JiveGlobals.migrateProperty("sasl.gssapi.debug");
+        JiveGlobals.migrateProperty("sasl.gssapi.config");
+        JiveGlobals.migrateProperty("sasl.gssapi.useSubjectCredsOnly");
+
         initMechanisms();
+
+        org.jivesoftware.util.PropertyEventDispatcher.addListener( new PropertyEventListener()
+        {
+            @Override
+            public void propertySet( String property, Map<String, Object> params )
+            {
+                if ("sasl.mechs".equals( property ) )
+                {
+                    initMechanisms();
+                }
+            }
+
+            @Override
+            public void propertyDeleted( String property, Map<String, Object> params )
+            {
+                if ("sasl.mechs".equals( property ) )
+                {
+                    initMechanisms();
+                }
+            }
+
+            @Override
+            public void xmlPropertySet( String property, Map<String, Object> params )
+            {}
+
+            @Override
+            public void xmlPropertyDeleted( String property, Map<String, Object> params )
+            {}
+        } );
     }
 
     public enum ElementType
@@ -227,12 +259,19 @@ public class SASLAuthentication {
                         throw new SaslFailureException( Failure.INVALID_MECHANISM, "The configuration of Openfire does not contain or allow the mechanism." );
                     }
 
+                    // OF-477: The SASL implementation requires the fully qualified host name (not the domain name!) of this server,
+                    // yet, most of the XMPP implemenations of DIGEST-MD5 will actually use the domain name. To account for that,
+                    // here, we'll use the host name, unless DIGEST-MD5 is being negotiated!
+                    final XMPPServerInfo serverInfo = XMPPServer.getInstance().getServerInfo();
+                    final String serverName = ( mechanismName.equals( "DIGEST-MD5" ) ? serverInfo.getXMPPDomain() : serverInfo.getHostname() );
+
                     // Construct the configuration properties
                     final Map<String, Object> props = new HashMap<>();
                     props.put( LocalSession.class.getCanonicalName(), session );
                     props.put( Sasl.POLICY_NOANONYMOUS, Boolean.toString( !JiveGlobals.getBooleanProperty( "xmpp.auth.anonymous" ) ) );
+                    props.put( "com.sun.security.sasl.digest.realm", serverInfo.getXMPPDomain() );
 
-                    SaslServer saslServer = Sasl.createSaslServer( mechanismName, "xmpp", session.getServerName(), props, new XMPPCallbackHandler() );
+                    SaslServer saslServer = Sasl.createSaslServer( mechanismName, "xmpp", serverName, props, new XMPPCallbackHandler() );
                     if ( saslServer == null )
                     {
                         throw new SaslFailureException( Failure.INVALID_MECHANISM, "There is no provider that can provide a SASL server for the desired mechanism and properties." );
@@ -262,7 +301,7 @@ public class SASLAuthentication {
                     // Decode any data that is provided in the client response.
                     final String encoded = doc.getTextTrim();
                     final byte[] decoded;
-                    if ( encoded == null || encoded.isEmpty() )
+                    if ( encoded == null || encoded.isEmpty() || encoded.equals("=") ) // java SaslServer cannot handle a null.
                     {
                         decoded = new byte[ 0 ];
                     }
@@ -361,20 +400,29 @@ public class SASLAuthentication {
         return false;
     }
 
-    private static void sendChallenge(Session session, byte[] challenge) {
+    private static void sendElement(Session session, String element, byte[] data) {
         StringBuilder reply = new StringBuilder(250);
-        if (challenge == null) {
-            challenge = new byte[0];
+        reply.append("<");
+        reply.append(element);
+        reply.append(" xmlns=\"urn:ietf:params:xml:ns:xmpp-sasl\"");
+        if (data != null) {
+            reply.append(">");
+            String data_b64 = StringUtils.encodeBase64(data).trim();
+            if ("".equals(data_b64)) {
+                data_b64 = "=";
+            }
+            reply.append(data_b64);
+            reply.append("</");
+            reply.append(element);
+            reply.append(">");
+        } else {
+            reply.append("/>");
         }
-        String challenge_b64 = StringUtils.encodeBase64(challenge).trim();
-        if ("".equals(challenge_b64)) {
-            challenge_b64 = "="; // Must be padded if null
-        }
-        reply.append(
-                "<challenge xmlns=\"urn:ietf:params:xml:ns:xmpp-sasl\">");
-        reply.append(challenge_b64);
-        reply.append("</challenge>");
         session.deliverRawText(reply.toString());
+    }
+
+    private static void sendChallenge(Session session, byte[] challenge) {
+        sendElement(session, "challenge", challenge);
     }
 
     private static void authenticationSuccessful(LocalSession session, String username,
@@ -385,16 +433,7 @@ public class SASLAuthentication {
             authenticationFailed(session, Failure.ACCOUNT_DISABLED);
             return;
         }
-        StringBuilder reply = new StringBuilder(80);
-        reply.append("<success xmlns=\"urn:ietf:params:xml:ns:xmpp-sasl\"");
-        if (successData != null) {
-            String successData_b64 = StringUtils.encodeBase64(successData).trim();
-            reply.append('>').append(successData_b64).append("</success>");
-        }
-        else {
-            reply.append("/>");
-        }
-        session.deliverRawText( reply.toString() );
+        sendElement(session, "success", successData);
         // We only support SASL for c2s
         if (session instanceof ClientSession) {
             ((LocalClientSession) session).setAuthToken(new AuthToken(username));
@@ -471,59 +510,117 @@ public class SASLAuthentication {
      *
      * @return the list of supported SASL mechanisms by the server.
      */
-    public static Set<String> getSupportedMechanisms() {
-        Set<String> answer = new HashSet<>(mechanisms);
-        // Clean up not-available mechanisms
-        for (Iterator<String> it=answer.iterator(); it.hasNext();) {
-            String mech = it.next();
-            if (mech.equals("CRAM-MD5") || mech.equals("DIGEST-MD5")) {
-                // Check if the user provider in use supports passwords retrieval. Accessing
-                // to the users passwords will be required by the CallbackHandler
-                if (!AuthFactory.supportsPasswordRetrieval()) {
-                    it.remove();
-                }
+    public static Set<String> getSupportedMechanisms()
+    {
+        // List all mechanism names for which there's an implementation.
+        final Set<String> implementedMechanisms = getImplementedMechanisms();
+
+        // Start off with all mechanisms that we intend to support.
+        final Set<String> answer = new HashSet<>( mechanisms );
+
+        // Clean up not-available mechanisms.
+        for ( final Iterator<String> it = answer.iterator(); it.hasNext(); )
+        {
+            final String mechanism = it.next();
+
+            if ( !implementedMechanisms.contains( mechanism ) )
+            {
+                Log.trace( "Cannot support '{}' as there's no implementation available.", mechanism );
+                it.remove();
+                continue;
             }
-            else if (mech.equals("SCRAM-SHA-1")) {
-                if (!AuthFactory.supportsPasswordRetrieval() && !AuthFactory.supportsScram()) {
-                    it.remove();
-                }
-            }
-            else if (mech.equals("ANONYMOUS")) {
-                // Check anonymous is supported
-                if (!JiveGlobals.getBooleanProperty( "xmpp.auth.anonymous" )) {
-                    it.remove();
-                }
-            }
-            else if (mech.equals("JIVE-SHAREDSECRET")) {
-                // Check shared secret is supported
-                if (!JiveSharedSecretSaslServer.isSharedSecretAllowed()) {
-                    it.remove();
-                }
+
+            switch ( mechanism )
+            {
+                case "CRAM-MD5": // intended fall-through
+                case "DIGEST-MD5":
+                    // Check if the user provider in use supports passwords retrieval. Access to the users passwords will be required by the CallbackHandler.
+                    if ( !AuthFactory.supportsPasswordRetrieval() )
+                    {
+                        Log.trace( "Cannot support '{}' as the AuthFactory that's in used does not support password retrieval.", mechanism );
+                        it.remove();
+                    }
+                    break;
+
+                case "SCRAM-SHA-1":
+                    if ( !AuthFactory.supportsPasswordRetrieval() && !AuthFactory.supportsScram() )
+                    {
+                        Log.trace( "Cannot support '{}' as the AuthFactory that's in used does not support password retrieval nor SCRAM.", mechanism );
+                        it.remove();
+                    }
+                    break;
+
+                case "ANONYMOUS":
+                    if ( !JiveGlobals.getBooleanProperty( "xmpp.auth.anonymous" ) )
+                    {
+                        Log.trace( "Cannot support '{}' as it has been disabled by configuration.", mechanism );
+                        it.remove();
+                    }
+                    break;
+
+                case "JIVE-SHAREDSECRET":
+                    if ( !JiveSharedSecretSaslServer.isSharedSecretAllowed() )
+                    {
+                        Log.trace( "Cannot support '{}' as it has been disabled by configuration.", mechanism );
+                        it.remove();
+                    }
+                    break;
+
+                case "GSSAPI":
+                    final String gssapiConfig = JiveGlobals.getProperty( "sasl.gssapi.config" );
+                    if ( gssapiConfig != null )
+                    {
+                        System.setProperty( "java.security.krb5.debug", JiveGlobals.getProperty( "sasl.gssapi.debug", "false" ) );
+                        System.setProperty( "java.security.auth.login.config", gssapiConfig );
+                        System.setProperty( "javax.security.auth.useSubjectCredsOnly", JiveGlobals.getProperty( "sasl.gssapi.useSubjectCredsOnly", "false" ) );
+                    }
+                    else
+                    {
+                        Log.trace( "Cannot support '{}' as the 'sasl.gssapi.config' property has not been defined.", mechanism );
+                        it.remove();
+                    }
+                    break;
             }
         }
         return answer;
     }
 
+    /**
+     * Returns a collection of mechanism names for which the JVM has an implementation available.
+     * <p/>
+     * Note that this need not (and likely will not) correspond with the list of mechanisms that is offered to XMPP
+     * peer entities, which is provided by #getSupportedMechanisms.
+     *
+     * @return a collection of SASL mechanism names (never null, possibly empty)
+     */
+    public static Set<String> getImplementedMechanisms()
+    {
+        final Set<String> result = new HashSet<>();
+        final Enumeration<SaslServerFactory> saslServerFactories = Sasl.getSaslServerFactories();
+        while ( saslServerFactories.hasMoreElements() )
+        {
+            final SaslServerFactory saslServerFactory = saslServerFactories.nextElement();
+            Collections.addAll( result, saslServerFactory.getMechanismNames( null ) );
+        }
+        return result;
+    }
+
     private static void initMechanisms()
     {
-        // Convert XML based provider setup to Database based
-        JiveGlobals.migrateProperty("sasl.mechs");
-        JiveGlobals.migrateProperty("sasl.gssapi.debug");
-        JiveGlobals.migrateProperty("sasl.gssapi.config");
-        JiveGlobals.migrateProperty("sasl.gssapi.useSubjectCredsOnly");
 
-        final String configuration = JiveGlobals.getProperty("sasl.mechs", "ANONYMOUS,PLAIN,DIGEST-MD5,CRAM-MD5,SCRAM-SHA-1,JIVE-SHAREDSECRET" );
+        final String configuration = JiveGlobals.getProperty("sasl.mechs", "ANONYMOUS,PLAIN,DIGEST-MD5,CRAM-MD5,SCRAM-SHA-1,JIVE-SHAREDSECRET,GSSAPI,EXTERNAL" );
         final StringTokenizer st = new StringTokenizer(configuration, " ,\t\n\r\f");
+        mechanisms = new HashSet<>();
         while ( st.hasMoreTokens() )
         {
-            final String mech = st.nextToken().toUpperCase();
+            final String mechanism = st.nextToken().toUpperCase();
             try
             {
-                addSupportedMechanism( mech );
+                addSupportedMechanism( mechanism );
             }
             catch ( Exception ex )
             {
-                Log.warn( "An exception occurred while trying to add support for SASL Mechanism '{}':", mech, ex );
+                Log.warn( "An exception occurred while trying to add support for SASL Mechanism '{}':", mechanism, ex );
             }
         }
     }

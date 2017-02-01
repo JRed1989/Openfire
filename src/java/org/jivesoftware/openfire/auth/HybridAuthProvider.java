@@ -1,7 +1,4 @@
 /**
- * $Revision: 1116 $
- * $Date: 2005-03-10 15:18:08 -0800 (Thu, 10 Mar 2005) $
- *
  * Copyright (C) 2005-2008 Jive Software. All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -38,6 +35,10 @@ import org.slf4j.LoggerFactory;
  *          If that fails:
  *      <li>If the tertiary provider is defined, attempt authentication.
  * </ol>
+ *
+ * This class related to, but is distinct from {@link MappedAuthProvider}. The Hybrid variant of the provider iterates
+ * over providers, operating on the first applicable instance. The Mapped variant, however, maps each user to exactly
+ * one provider.
  *
  * To enable this provider, set the <tt>provider.auth.className</tt> system property to
  * <tt>org.jivesoftware.openfire.auth.HybridAuthProvider</tt>.
@@ -77,7 +78,7 @@ import org.slf4j.LoggerFactory;
  */
 public class HybridAuthProvider implements AuthProvider {
 
-	private static final Logger Log = LoggerFactory.getLogger(HybridAuthProvider.class);
+    private static final Logger Log = LoggerFactory.getLogger(HybridAuthProvider.class);
 
     private AuthProvider primaryProvider;
     private AuthProvider secondaryProvider;
@@ -227,5 +228,25 @@ public class HybridAuthProvider implements AuthProvider {
     public boolean isScramSupported() {
         // TODO Auto-generated method stub
         return false;
+    }
+
+    @Override
+    public String getSalt(String username) throws UnsupportedOperationException, UserNotFoundException {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public int getIterations(String username) throws UnsupportedOperationException, UserNotFoundException {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public String getServerKey(String username) throws UnsupportedOperationException, UserNotFoundException {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public String getStoredKey(String username) throws UnsupportedOperationException, UserNotFoundException {
+        throw new UnsupportedOperationException();
     }
 }

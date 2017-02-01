@@ -1,8 +1,4 @@
 /**
- * $RCSfile: MUCRoomHistory.java,v $
- * $Revision: 3157 $
- * $Date: 2005-12-04 22:54:55 -0300 (Sun, 04 Dec 2005) $
- *
  * Copyright (C) 2004-2008 Jive Software. All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -20,14 +16,19 @@
 
 package org.jivesoftware.openfire.muc;
 
+import org.dom4j.Attribute;
 import org.dom4j.Element;
+import org.dom4j.Namespace;
+import org.dom4j.io.SAXReader;
 import org.jivesoftware.openfire.user.UserNotFoundException;
 import org.jivesoftware.util.XMPPDateTimeFormat;
 import org.xmpp.packet.JID;
 import org.xmpp.packet.Message;
 
+import java.io.StringReader;
 import java.util.Date;
 import java.util.Iterator;
+import java.util.List;
 import java.util.ListIterator;
 
 /**
@@ -147,10 +148,33 @@ public final class MUCRoomHistory {
      * @param body the body of the message.
      */
     public void addOldMessage(String senderJID, String nickname, Date sentDate, String subject,
-            String body)
+            String body, String stanza)
     {
         Message message = new Message();
         message.setType(Message.Type.groupchat);
+        if (stanza != null) {
+            // payload initialized as XML string from DB
+            SAXReader xmlReader = new SAXReader();
+            xmlReader.setEncoding("UTF-8");
+            try {
+                Element element = xmlReader.read(new StringReader(stanza)).getRootElement();
+                for (Element child : (List<Element>)element.elements()) {
+                    Namespace ns = child.getNamespace();
+                    if (ns == null || ns.getURI().equals("jabber:client") || ns.getURI().equals("jabber:server")) {
+                        continue;
+                    }
+                    Element added = message.addChildElement(child.getName(), child.getNamespaceURI());
+                    for (Attribute attr : (List<Attribute>)child.attributes()) {
+                        added.add(attr);
+                    }
+                    for (Element el : (List<Element>)child.elements()) {
+                        added.add(el);
+                    }
+                }
+            } catch (Exception ex) {
+                // log.error("Failed to parse payload XML", ex);
+            }
+        }
         message.setSubject(subject);
         message.setBody(body);
         // Set the sender of the message

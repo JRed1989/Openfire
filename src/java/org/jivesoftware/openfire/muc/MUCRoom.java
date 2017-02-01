@@ -1,8 +1,4 @@
 /**
- * $RCSfile$
- * $Revision: 2979 $
- * $Date: 2005-10-18 19:46:58 -0300 (Tue, 18 Oct 2005) $
- *
  * Copyright (C) 2004-2008 Jive Software. All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -525,8 +521,9 @@ public interface MUCRoom extends Externalizable, Result {
      * @param packet The packet to send.
      * @param senderRole the role of the user that is trying to send a public message.
      * @throws NotFoundException If the user is sending a packet to a room JID that does not exist.
+     * @throws ForbiddenException If a user of this role is not permitted to send private messages in this room.
      */
-    public void sendPrivatePacket(Packet packet, MUCRole senderRole) throws NotFoundException;
+    public void sendPrivatePacket(Packet packet, MUCRole senderRole) throws NotFoundException, ForbiddenException;
 
     /**
      * Kicks a user from the room. If the user was in the room, the returned updated presence will
@@ -620,6 +617,22 @@ public interface MUCRoom extends Externalizable, Result {
      *        JID of every occupant.
      */
     public void setCanAnyoneDiscoverJID(boolean canAnyoneDiscoverJID);
+
+    /**
+     * Returns the minimal role of persons that are allowed to send private messages in the room. The returned value is
+     * any one of: "anyone", "moderators", "participants", "none".
+     *
+     * @return The minimal role of persons that are allowed to send private messages in the room (never null).
+     */
+    public String canSendPrivateMessage();
+
+    /**
+     * Sets the minimal role of persons that are allowed to send private messages in the room. The provided value is
+     * any one of: "anyone", "moderators", "participants", "none". If another value is set, "anyone" is used instead.
+     *
+     * @param role The minimal role of persons that are allowed to send private messages in the room (never null).
+     */
+    public void setCanSendPrivateMessage(String role);
 
     /**
      * Returns true if participants are allowed to change the room's subject.

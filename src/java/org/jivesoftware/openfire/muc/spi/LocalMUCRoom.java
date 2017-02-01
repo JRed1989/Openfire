@@ -1,8 +1,4 @@
 /**
- * $RCSfile$
- * $Revision: 3158 $
- * $Date: 2005-12-04 22:55:49 -0300 (Sun, 04 Dec 2005) $
- *
  * Copyright (C) 2004-2008 Jive Software. All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -269,6 +265,11 @@ public class LocalMUCRoom implements MUCRoom, GroupEventListener {
     private boolean canAnyoneDiscoverJID;
 
     /**
+     * The minimal role of persons that are allowed to send private messages in the room.
+     */
+    private String canSendPrivateMessage;
+
+    /**
      * Enables the logging of the conversation. The conversation in the room will be saved to the
      * database.
      */
@@ -382,7 +383,6 @@ public class LocalMUCRoom implements MUCRoom, GroupEventListener {
         rolesToBroadcastPresence.add("moderator");
         rolesToBroadcastPresence.add("participant");
         rolesToBroadcastPresence.add("visitor");
-        GroupEventDispatcher.addListener(this);
     }
 
     @Override
@@ -716,6 +716,10 @@ public class LocalMUCRoom implements MUCRoom, GroupEventListener {
         }
         else {
             historyRequest.sendHistory(joinRole, roomHistory);
+        }
+        Message roomSubject = roomHistory.getChangedSubject();
+        if (roomSubject != null) {
+            joinRole.send(roomSubject);
         }
         if (!clientOnlyJoin) {
             // Update the date when the last occupant left the room
@@ -1061,7 +1065,18 @@ public class LocalMUCRoom implements MUCRoom, GroupEventListener {
     }
 
     @Override
-    public void sendPrivatePacket(Packet packet, MUCRole senderRole) throws NotFoundException {
+    public void sendPrivatePacket(Packet packet, MUCRole senderRole) throws NotFoundException, ForbiddenException {
+        switch (senderRole.getRole()) { // intended fall-through
+            case none:
+                throw new ForbiddenException();
+            default:
+            case visitor:
+                if (canSendPrivateMessage().equals( "participants" )) throw new ForbiddenException();
+            case participant:
+                if (canSendPrivateMessage().equals( "moderators" )) throw new ForbiddenException();
+            case moderator:
+                if (canSendPrivateMessage().equals( "none" )) throw new ForbiddenException();
+        }
         String resource = packet.getTo().getResource();
         List<MUCRole> occupants = occupantsByNickname.get(resource.toLowerCase());
         if (occupants == null || occupants.size() == 0) {
@@ -1605,6 +1620,8 @@ public class LocalMUCRoom implements MUCRoom, GroupEventListener {
                 if (!nickname.equals(members.get(bareJID))) {
                     throw new ConflictException();
                 }
+            } else if (isLoginRestrictedToNickname() && (nickname == null || nickname.trim().length() == 0)) {
+                throw new ConflictException();
             }
             // Check that the room always has an owner
             if (owners.contains(bareJID) && owners.size() == 1) {
@@ -2327,6 +2344,29 @@ public class LocalMUCRoom implements MUCRoom, GroupEventListener {
         this.canAnyoneDiscoverJID = canAnyoneDiscoverJID;
     }
 
+    @Override
+    public String canSendPrivateMessage() {
+        return canSendPrivateMessage == null ? "anyone" : canSendPrivateMessage;
+    }
+
+    @Override
+    public void setCanSendPrivateMessage(String role) {
+        if ( role == null ) {
+            role = "(null)";
+        }
+
+        switch( role.toLowerCase() ) {
+            case "none":
+            case "moderators":
+            case "participants":
+            case "anyone":
+                this.canSendPrivateMessage = role.toLowerCase();
+                break;
+            default:
+                Log.warn( "Illegal value for muc#roomconfig_allowpm: '{}'. Defaulting to 'anyone'", role.toLowerCase() );
+                this.canSendPrivateMessage = "anyone";
+        }
+    }
     @Override
     public boolean canOccupantsChangeSubject() {
         return canOccupantsChangeSubject;
